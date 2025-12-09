@@ -1,0 +1,73 @@
+%% Prediction
+% Author: Zhonghua Shen
+% Date: 2025-12-05
+% Description: Clinical UTIs validation
+
+%% -------------------------------
+% Prediction 
+%% -------------------------------
+
+loadedData = load('best_multimodal_model.h5');
+loadedData = load('full_test_data. mat');
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support
+import scipy.io as sio
+import pandas as pd
+
+MODEL_PATH = r'Path\best_multimodal_model.h5'
+TEST_DATA_PATH = r'Path\full_test_data.mat'
+
+def load_new_data(file_path):
+    data = sio.loadmat(file_path)
+    full_test_data = data['full_test_data'][0]
+
+    X_test_spectra = np.expand_dims(full_test_data['X_test_spectra_full'][0], axis=-1)
+    X_test_genes = full_test_data['X_test_genes_full'][0]
+    Y_test = full_test_data['Y_test_full'][0]
+
+def evaluate_model(model_path, test_data_path):
+    model = load_model(model_path)
+    
+    X_test_spectra, X_test_genes, Y_test = load_new_data(test_data_path)
+
+    preds = model.predict([X_test_spectra, X_test_genes])
+    preds_bin = (preds > 0.5).astype(int)
+    
+    metrics = []
+    for i in range(Y_test.shape[1]):
+        y_true = Y_test[:, i]
+        y_pred = preds_bin[:, i]
+        acc = accuracy_score(y_true, y_pred)
+        pre = precision_score(y_true, y_pred, zero_division=0)
+        rec = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+
+        metrics.append([f"Antibody{i + 1}", acc, pre, rec, f1])
+        print(f"Antibody {i + 1:2d}: Accuracy={acc:.4f}, Precision={pre:.4f}, Recall={rec:.4f}, F1={f1:.4f}")
+
+    df = pd.DataFrame(metrics, columns=["Antibody", "Accuracy", "Precision", "Recall", "F1"])
+    df.to_csv("Data.csv", index=False, encoding='utf-8-sig')
+
+    subset_accuracy = accuracy_score(Y_test, preds_bin)
+    correct_labels = (Y_test == preds_bin).sum()
+    total_labels = Y_test.size
+    micro_accuracy = correct_labels / total_labels
+    micro_pre, micro_rec, micro_f1, _ = precision_recall_fscore_support(
+        Y_test, preds_bin, average='micro', zero_division=0)
+
+    print("\n Overall Evaluation Metrics:")
+    print("-" * 50)
+    print(f"Subset Accuracy:  {subset_accuracy:.4f}")
+    print(f"Micro Accuracy:   {micro_accuracy:.4f}")
+    print(f"Precision:        {micro_pre:.4f}")
+    print(f"Recall:           {micro_rec:.4f}")
+    print(f"F1 Score:         {micro_f1:.4f}")
+
+    return df
+
+
+if __name__ == "__main__":
+    df_results = evaluate_model(MODEL_PATH, TEST_DATA_PATH)
