@@ -1,0 +1,67 @@
+%% ROC
+% Author: Zhonghua Shen
+% Date: 2025-12-05
+% Description: Plot the ROC curves
+
+%% -------------------------------
+% ROC
+%% -------------------------------
+
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+import numpy as np
+
+% Overall ROC
+y_true_flat = Y_test_full.ravel()
+y_score_flat = final_preds.ravel()
+
+fpr_overall, tpr_overall, _ = roc_curve(y_true_flat, y_score_flat)
+auc_overall = auc(fpr_overall, tpr_overall)
+
+plt.figure(figsize=(8, 8))
+plt.gca().set_facecolor("#F4FAFC")  
+
+plt.plot(
+    fpr_overall, tpr_overall,
+    color="blue", linewidth=2,
+    label=f"Micro-average ROC (AUC = {auc_overall:.2f})"
+)
+plt.plot([0, 1], [0, 1], "k--", linewidth=1.2, label="Random")
+
+plt.xlabel("False Positive Rate (1 - Specificity)", fontsize=14)
+plt.ylabel("True Positive Rate (Sensitivity)", fontsize=14)
+plt.title("Overall ROC (Micro-average) on Full Test Set (n = 308)", fontsize=16)
+plt.legend(loc="lower right", fontsize=11)
+plt.grid(True, linestyle="--", alpha=0.4)
+
+plt.savefig("ROC_overall_fulltest_308.svg", format="svg", dpi=300, bbox_inches='tight')
+plt.close()
+
+% Individual ROC
+num_classes = Y_test_full.shape[1]
+
+plt.figure(figsize=(12, 10))
+plt.gca().set_facecolor("#F4FAFC")
+
+colors = plt.cm.tab20(np.linspace(0, 1, num_classes))
+
+for class_idx in range(num_classes):
+    fpr, tpr, _ = roc_curve(Y_test_full[:, class_idx], final_preds[:, class_idx])
+    auc_value = auc(fpr, tpr)
+    plt.plot(
+        fpr, tpr,
+        color=colors[class_idx],
+        linewidth=1.8,
+        label=f"Antibiotic {class_idx + 1} (AUC = {auc_value:.2f})"
+    )
+
+plt.plot([0, 1], [0, 1], "k--", linewidth=1.2, label="Random")
+
+plt.xlabel("False Positive Rate (1 - Specificity)", fontsize=14)
+plt.ylabel("True Positive Rate (Sensitivity)", fontsize=14)
+plt.title("ROC Curves for 22 Antibiotics on Full Test Set (n = 308)", fontsize=16)
+plt.legend(loc="lower right", fontsize=9)
+plt.grid(True, linestyle="--", alpha=0.4)
+
+plt.savefig("ROC_22_antibiotics_fulltest_308.svg", format="svg", dpi=300, bbox_inches='tight')
+plt.close()
