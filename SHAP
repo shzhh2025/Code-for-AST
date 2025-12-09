@@ -1,0 +1,215 @@
+%% SHAP
+% Author: Zhonghua Shen
+% Date: 2025-12-05
+% Description: Calculate SHAP value
+
+%% -------------------------------
+% Calculate SHAP
+%% -------------------------------
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropout, Input, Concatenate
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+import scipy.io as sio
+import shap
+
+loadedData = load('fold_data.mat');
+loadedData = load('full_test_data.mat');  
+cross_val_data = data['fold_data']
+    first_fold = cross_val_data[0, 0]
+
+    X_train_spectra = first_fold['X_train_spectra']
+    X_train_genes = first_fold['X_train_genes']
+    Y_train = first_fold['Y_train']
+    X_test_spectra = first_fold['X_test_spectra']
+    X_test_genes = first_fold['X_test_genes']
+    Y_test = first_fold['Y_test']
+
+    X_train_spectra = np.expand_dims(X_train_spectra, axis=-1)
+    X_test_spectra = np.expand_dims(X_test_spectra, axis=-1)
+
+% CNN + MLP
+def create_model(input_shape_spectra, input_shape_genes, num_classes):
+    spectra_input = Input(shape=input_shape_spectra, name="Spectra_Input")
+    x = Conv1D(16, kernel_size=5, padding='same', activation='relu')(spectra_input)
+    x = MaxPooling1D(pool_size=2, strides=2)(x)
+
+    x = Conv1D(32, kernel_size=3, padding='same', activation='relu')(x)
+    x = MaxPooling1D(pool_size=2, strides=2)(x)
+
+    x = Conv1D(64, kernel_size=3, padding='same', activation='relu')(x)
+    x = MaxPooling1D(pool_size=2, strides=2)(x)
+    x = Flatten()(x)
+    x = Dense(64, activation='relu')(x)
+
+    genes_input = Input(shape=input_shape_genes, name="Genes_Input")
+    y = Dense(64, activation='relu')(genes_input)
+    y = Dropout(0.5)(y)
+
+    combined = Concatenate()([x, y])
+    z = Dense(96, activation='relu')(combined)
+    z = Dense(64, activation='relu')(z)
+    z = Dense(22, activation='relu')(z)
+
+    output = Dense(num_classes, activation='sigmoid')(z)
+    model = Model(inputs=[spectra_input, genes_input], outputs=output)
+    return model
+
+def train_and_evaluate(model, X_train_spectra, X_train_genes, Y_train, X_test_spectra, X_test_genes, Y_test):
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    model.fit([X_train_spectra, X_train_genes], Y_train, epochs=20, batch_size=32,
+              validation_data=([X_test_spectra, X_test_genes], Y_test))
+
+    Y_pred = model.predict([X_test_spectra, X_test_genes])
+    Y_pred = (Y_pred > 0.5).astype(int)
+
+    accuracy = accuracy_score(Y_test, Y_pred)
+    precision, recall, f1, _ = precision_recall_fscore_support(Y_test, Y_pred, average='micro', zero_division=0)
+    return accuracy, precision, recall, f1
+
+% Calculate SHAP value
+def compute_shap_values(model, X_train_spectra, X_train_genes, X_test_spectra, X_test_genes, batch_size=20,
+                        background_size=200):
+    
+    X_train_combined = np.hstack((X_train_spectra.reshape(X_train_spectra.shape[0], -1), X_train_genes))
+    X_test_combined = np.hstack((X_test_spectra.reshape(X_test_spectra.shape[0], -1), X_test_genes))
+
+    background_indices = np.random.choice(X_train_combined.shape[0], background_size, replace=False)
+    background = X_train_combined[background_indices]
+
+    def model_predict(data):
+        spectra = data[:, :X_test_spectra.shape[1]].reshape((-1, X_test_spectra.shape[1], 1))
+        genes = data[:, X_test_spectra.shape[1]:]
+        return model.predict([spectra, genes])
+
+    num_features = X_test_combined.shape[1]  
+    max_evals = max(2 * num_features + 1, 2000)  
+    print(f"Using max_evals={max_evals} for SHAP computation...")
+explainer = shap.Explainer(model_predict, background, max_evals=max_evals)  
+
+        shap_values_list = []
+    for i in range(0, X_test_combined.shape[0], batch_size):
+        batch_data = X_test_combined[i:i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}/{(X_test_combined.shape[0] // batch_size) + 1}...")
+        shap_values_list.append(explainer(batch_data).values)
+
+    shap_values = np.vstack(shap_values_list)
+    return shap_values, X_test_combined
+
+def save_shap_values(shap_values, X_test_combined):
+    save_path = "shap_results.npz"  
+    np.savez(save_path, shap_values=shap_values, X_test_combined=X_test_combined)
+    print(f"SHAP values saved to {save_path}")
+
+if __name__ == '__main__':
+    X_train_spectra, X_train_genes, Y_train, X_test_spectra, X_test_genes, Y_test = load_data()
+
+    input_shape_spectra = X_train_spectra.shape[1:]
+    input_shape_genes = X_train_genes.shape[1:]
+    num_classes = Y_train.shape[1]
+    model = create_model(input_shape_spectra, input_shape_genes, num_classes)
+
+    num_folds = 5
+    best_model = None
+    best_accuracy = 0
+
+   shap_values, X_test_combined = compute_shap_values(model, X_train_spectra, X_train_genes, X_test_spectra,
+                                                       X_test_genes, batch_size=20, background_size=200)
+    save_shap_values(shap_values, X_test_combined)
+
+
+%% -------------------------------
+% SHAP visualization
+%% -------------------------------
+
+import numpy as np
+import shap
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
+
+file_path = r"path\shap_results_first_fold.npz"
+data = np.load(file_path)
+shap_values = data['shap_values']
+X_test_combined = data['X_test_combined']
+
+spectrum_coordinates = [f"{i + 600} cm-1" for i in range(1288)]
+gene_names = [f"Gene {i + 1}" for i in range(19)]
+feature_names = spectrum_coordinates + gene_names
+
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+output_dir = f"visualizations_{timestamp}"
+os.makedirs(output_dir, exist_ok=True)
+print(f"All visualizations will be saved to: {output_dir}")
+
+% Mean the classification dimension (22 categories) of SHAP values
+shap_values_mean = shap_values.mean(axis=2)  
+
+%  Overall Beeswarm and Bar 
+for top_features in [10]:
+    save_path_beeswarm = os.path.join(output_dir, f"beeswarm_overall_top{top_features}.svg")
+    plt.figure(figsize=(12, 6))
+    shap.summary_plot(
+        shap_values_mean,
+        X_test_combined,
+        feature_names=feature_names,
+        plot_type="dot",  
+        max_display=top_features,  
+        show=False  
+    )
+    plt.savefig(save_path_beeswarm, format='svg', bbox_inches='tight')
+    plt.close()
+    print(f"Overall Beeswarm plot (top {top_features}) saved: {save_path_beeswarm}")
+
+for top_features in [10]:
+    save_path_bar = os.path.join(output_dir, f"bar_overall_top{top_features}.svg")
+    plt.figure(figsize=(12, 6))
+    shap.summary_plot(
+        shap_values_mean,
+        X_test_combined,
+        feature_names=feature_names,
+        plot_type="bar",  
+        max_display=top_features,  
+        show=False
+    )
+    plt.savefig(save_path_bar, format='svg', bbox_inches='tight')
+    plt.close()
+    print(f"Overall Bar plot (top {top_features}) saved: {save_path_bar}")
+
+
+%  Individual Beeswarm and Bar 
+for label_idx in range(22): 
+    print(f"Generating visualizations for Antibiotic {label_idx + 1}...")
+
+    shap_values_single_label = shap_values[:, :, label_idx]
+    for top_features in [10]:
+        save_path_beeswarm = os.path.join(output_dir, f"beeswarm_label{label_idx + 1}_top{top_features}.svg")
+        plt.figure(figsize=(12, 6))
+        shap.summary_plot(
+            shap_values_single_label,
+            X_test_combined,
+            feature_names=feature_names,
+            plot_type="dot", 
+            max_display=top_features,  
+            show=False
+        )
+        plt.savefig(save_path_beeswarm, format='svg', bbox_inches='tight')
+        plt.close()
+        print(f"Beeswarm plot for Antibiotic {label_idx + 1} (top {top_features}) saved: {save_path_beeswarm}")
+
+ for top_features in [10]:
+        save_path_bar = os.path.join(output_dir, f"bar_label{label_idx + 1}_top{top_features}.svg")
+        plt.figure(figsize=(12, 6))
+        shap.summary_plot(
+            shap_values_single_label,
+            X_test_combined,
+            feature_names=feature_names,
+            plot_type="bar",  
+            max_display=top_features,  
+            show=False
+        )
+        plt.savefig(save_path_bar, format='svg', bbox_inches='tight')
+        plt.close()
+        print(f"Bar plot for Antibiotic {label_idx + 1} (top {top_features}) saved: {save_path_bar}")
